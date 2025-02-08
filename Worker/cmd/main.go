@@ -2,11 +2,11 @@ package main
 
 import (
 	"log"
-	"myproject/pkg/ffmpeg"
+	"worker/internal/conversor"
 )
 
 func main() {
-	err := ffmpeg.ConvertFile("input.mp4", "output.avi")
+	err := conversor.ConvertFile("example-wpp-audio.ogg", "aac")
 	if err != nil {
 		log.Fatalf("Erro ao converter: %v", err)
 	}
