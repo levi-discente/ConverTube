@@ -11,7 +11,7 @@ import (
 
 func TestRabbitMQCommunication(t *testing.T) {
 	// 🔥 Conectar ao RabbitMQ
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	conn, err := amqp.Dial("amqp://guest:guest@rabbitmq.default.svc.cluster.local:5672/")
 	if err != nil {
 		t.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}

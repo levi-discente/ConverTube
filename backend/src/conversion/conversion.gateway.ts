@@ -4,41 +4,41 @@ import {
   OnGatewayInit,
   OnGatewayConnection,
   OnGatewayDisconnect,
-} from "@nestjs/websockets";
-import { Server, Socket } from "socket.io";
-import * as amqp from "amqplib";
-import { Logger } from "@nestjs/common";
-import { ResponseMessage } from "./conversion.interfaces";
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import * as amqp from 'amqplib';
+import { Logger } from '@nestjs/common';
+import { ResponseMessage } from './conversion.interfaces';
 
 @WebSocketGateway({
-  path: "/ws/",
+  path: '/ws/',
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    origin: 'http://frontend.local',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   },
 })
 export class ConversionGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
-{
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(ConversionGateway.name);
   private connection: amqp.Connection;
   private channel: amqp.Channel;
-  private activeConsumers: Map<string, string> = new Map(); // Mapeia operationId → consumerTag
+  private activeConsumers: Map<string, string> = new Map();
 
   async afterInit(server: Server) {
     try {
       this.connection = await amqp.connect(
-        process.env.RABBITMQ_URL || "amqp://guest:guest@localhost:5672/",
+        process.env.RABBITMQ_URL ||
+        'amqp://guest:guest@rabbitmq.default.svc.cluster.local:5672/',
       );
       this.channel = await this.connection.createChannel();
-      this.logger.log("RabbitMQ connection established in WebSocket Gateway");
+      this.logger.log('RabbitMQ connection established in WebSocket Gateway');
     } catch (err) {
-      this.logger.error("Failed to connect to RabbitMQ", err);
+      this.logger.error('Failed to connect to RabbitMQ', err);
     }
   }
 
@@ -79,22 +79,22 @@ export class ConversionGateway
               const response: ResponseMessage = JSON.parse(
                 msg.content.toString(),
               );
-              client.emit("jobUpdate", response);
+              client.emit('jobUpdate', response);
               this.logger.log(
                 `Sent update to client ${client.id}: ${JSON.stringify(response)}`,
               );
 
               // Finaliza se for erro ou sucesso
               if (
-                response.status === "error" ||
-                response.status === "success"
+                response.status === 'error' ||
+                response.status === 'success'
               ) {
                 this.logger.log(`Finalizando job ${operationId}`);
                 this.cleanupJob(operationId);
                 client.disconnect();
               }
             } catch (error) {
-              this.logger.error("Failed to parse message", error);
+              this.logger.error('Failed to parse message', error);
             }
           }
         },
@@ -106,9 +106,9 @@ export class ConversionGateway
       this.logger.log(`Subscribed to job responses on queue: ${queueName}`);
     } catch (err) {
       this.logger.error(`Failed to subscribe to queue ${queueName}`, err);
-      client.emit("jobUpdate", {
-        status: "error",
-        message: "Subscription failed",
+      client.emit('jobUpdate', {
+        status: 'error',
+        message: 'Subscription failed',
       });
     }
   }
@@ -118,7 +118,7 @@ export class ConversionGateway
     if (consumerTag) {
       this.channel
         .cancel(consumerTag)
-        .catch((err) => this.logger.error("Error canceling consumer", err));
+        .catch((err) => this.logger.error('Error canceling consumer', err));
       this.activeConsumers.delete(operationId);
     }
   }

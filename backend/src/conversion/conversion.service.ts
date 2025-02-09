@@ -2,12 +2,18 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { RabbitMQPublisher } from '../rabbitmq/rabbitmq.publisher';
 import * as path from 'path';
+import { KubernetesService } from 'src/kubernetes/kubernetes.service';
+import { StorageService } from 'src/storage/storage.service';
 
 @Injectable()
 export class ConversionService {
   private readonly logger = new Logger(ConversionService.name);
 
-  constructor(private readonly rabbitPublisher: RabbitMQPublisher) {}
+  constructor(
+    private readonly rabbitPublisher: RabbitMQPublisher,
+    private readonly kubernetesService: KubernetesService,
+    private readonly storageService: StorageService,
+  ) {}
 
   private readonly supportedFormats: Record<string, boolean> = {
     mp4: true,
@@ -44,15 +50,15 @@ export class ConversionService {
   private readonly imageFormats = new Set(['gif']);
 
   async storeFile(file: Express.Multer.File): Promise<string> {
-    const ext = this.getFileExtension(file.originalname);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname);
+    const objectName = `${path.basename(file.originalname, ext)}-${uniqueSuffix}${ext}`;
 
-    if (!this.supportedFormats[ext]) {
-      throw new BadRequestException(
-        `Formato de arquivo '${ext}' não é suportado.`,
-      );
-    }
-
-    return Promise.resolve(path.resolve(file.path));
+    return await this.storageService.uploadFile(
+      file.buffer,
+      objectName,
+      file.size,
+    );
   }
 
   async createConversionJob(
@@ -89,6 +95,7 @@ export class ConversionService {
 
     await this.rabbitPublisher.publish(`conversion_jobs_${operationId}`, job);
     this.logger.log(`Conversion job created: ${operationId}`);
+    await this.kubernetesService.createWorkerJob(operationId);
 
     return { operationId, responseQueue };
   }
@@ -105,14 +112,14 @@ export class ConversionService {
       this.audioFormats.has(inputFormat) &&
       this.videoFormats.has(outputFormat)
     ) {
-      return true; // Áudio → Vídeo não permitido
+      return true;
     }
     if (
       this.imageFormats.has(inputFormat) &&
       this.videoFormats.has(outputFormat)
     ) {
-      return true; // GIF → Vídeo não permitido
+      return true;
     }
-    return false; // Caso contrário, conversão válida
+    return false;
   }
 }
