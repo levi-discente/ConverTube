@@ -1,101 +1,237 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState } from 'react';
+import { io } from 'socket.io-client';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+import logoImage from '../public/logo.png'
+import Image from 'next/image';
+import { FaVideo } from 'react-icons/fa6';
+import { FaMusic } from 'react-icons/fa';
+
+export default function UploadPage() {
+  const [file, setFile] = useState<File | null>(null);
+  const [outputFormat, setOutputFormat] = useState('mp4');
+  const [quality, setQuality] = useState('low');
+  const [progress, setProgress] = useState<number>(0);
+  const [operationId, setOperationId] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState('video'); // Video ou audio
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files.length > 0) {
+      setFile(event.target.files[0]);
+    }
+  };
+
+  const showError = (message: string) => {
+    toast.error(message, {
+      position: 'top-right',
+      autoClose: 5000,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+      theme: 'dark',
+    });
+  };
+
+  const showSuccess = (message: string) => {
+    toast.success(message, {
+      position: 'top-right',
+      autoClose: 3000,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+      theme: 'dark',
+    });
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      showError('Selecione um arquivo primeiro!');
+      return;
+    }
+    setProgress(0);
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('outputFormat', outputFormat);
+    formData.append('quality', quality);
+
+    try {
+      const response = await fetch('http://localhost:3000/conversion/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Erro ao enviar o arquivo.');
+      }
+
+      setOperationId(data.operationId);
+      listenToWebSocket(data.operationId);
+    } catch (error: any) {
+      console.error('Erro ao enviar o arquivo:', error);
+      showError(error.message || 'Erro ao enviar o arquivo.');
+    }
+  };
+
+  const listenToWebSocket = (operationId: string) => {
+    const socket = io('http://localhost:3000', {
+      path: '/ws/',
+      query: { operationId },
+    });
+
+    socket.on('jobUpdate', (update) => {
+      if (update.status === 'progress') {
+        setProgress(update.progress || 0);
+      } else if (update.status === 'success') {
+        setProgress(100);
+        setDownloadUrl(`http://localhost:3000/conversion/download/${update.new_file_name}`);
+        showSuccess('Conversão concluída com sucesso!');
+        socket.disconnect();
+      } else if (update.status === 'error') {
+        showError('Erro na conversão');
+        socket.disconnect();
+      }
+    });
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <div className="min-h-screen flex flex-col items-center justify-center bg-black text-white p-4">
+      <ToastContainer />
+      <Image src={logoImage} alt='logo' width={240} />
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+      <div className="bg-gray-900 p-6 rounded-lg shadow-lg w-96 text-center">
+        {!downloadUrl && (
+          <>
+            <input
+              type="file"
+              onChange={handleFileChange}
+              className="mb-4 w-full p-2 bg-gray-700 rounded-lg text-white"
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+
+            <div className="tabs w-full">
+              <div className="tab-list flex">
+                <button
+                  onClick={() => {
+                    setActiveTab('video');
+                    setOutputFormat('mp4');
+                    setQuality('low');
+                  }}
+                  className={`tab-button py-2 w-full rounded-t-md transition-all px-4 flex items-center justify-center
+      ${activeTab === 'video' ? 'bg-gray-400' : 'bg-gray-700'} 
+      ${activeTab === 'video' ? 'text-black' : 'text-white'}`}
+                >
+                  <FaVideo className="mr-2" /> {/* Adiciona margem à direita do ícone */}
+                  Video
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveTab('audio');
+                    setOutputFormat('mp3');
+                    setQuality('low');
+                  }}
+                  className={`tab-button py-2 w-full rounded-t-md transition-all px-4 flex items-center justify-center
+      ${activeTab === 'audio' ? 'bg-gray-400' : 'bg-gray-700'} 
+      ${activeTab === 'audio' ? 'text-black' : 'text-white'}`}
+                >
+                  <FaMusic className="mr-2" /> {/* Adiciona margem à direita do ícone */}
+                  Áudio
+                </button>
+              </div>
+            </div>
+
+            <div className={`mb-4 p-4 ${activeTab ? 'bg-gray-400' : 'bg-gray-700'} ${activeTab ? 'text-black' : 'bg-gray-700'}`}>
+              <label className="block text-left mb-2">Formato</label>
+              <select
+                onChange={(e) => setOutputFormat(e.target.value)}
+                value={outputFormat}
+                className="p-2 rounded-lg bg-gray-700 text-white w-full"
+              >
+                {activeTab === 'video' && (
+                  <>
+                    <option value="mp4">MP4</option>
+                    <option value="avi">AVI</option>
+                    <option value="mkv">MKV</option>
+                    <option value="mov">MOV</option>
+                    <option value="flv">FLV</option>
+                    <option value="webm">WEBM</option>
+                    <option value="gif">GIF</option>
+                  </>
+                )}
+                {activeTab === 'audio' && (
+                  <>
+                    <option value="mp3">MP3</option>
+                    <option value="wav">WAV</option>
+                    <option value="aac">AAC</option>
+                    <option value="flac">FLAC</option>
+                    <option value="wma">WMA</option>
+                  </>
+                )}
+              </select>
+
+              <label className="block text-left mb-2">Qualidade</label>
+              <select
+                onChange={(e) => setQuality(e.target.value)}
+                value={quality}
+                className="p-2 rounded-lg bg-gray-700 text-white w-full"
+              >
+                <option value="low">Baixa</option>
+                <option value="medium">Média</option>
+                <option value="high">Alta</option>
+              </select>
+            </div>
+
+            <button
+              onClick={handleUpload}
+              className="w-full p-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition"
+            >
+              Enviar
+            </button>
+          </>
+        )}
+
+        {operationId && (
+          <div className="mt-4">
+            <h3 className="text-lg font-semibold">Progresso:</h3>
+            <div className="w-full bg-gray-700 rounded-full h-4 mt-2">
+              <div
+                className="bg-blue-500 h-4 rounded-full"
+                style={{ width: `${progress}%` }}
+              ></div>
+            </div>
+            <p className="text-sm mt-2">{progress}%</p>
+          </div>
+        )}
+
+        {downloadUrl && (
+          <div className="flex flex-col items-center mt-4">
+            <a
+              href={downloadUrl}
+              download
+              className="mb-4 p-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition"
+            >
+              Baixar Arquivo
+            </a>
+            <button
+              onClick={() => {
+                setFile(null);
+                setOperationId(null);
+                setDownloadUrl(null);
+                setProgress(0);
+              }}
+              className="p-3 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg transition"
+            >
+              Fazer outra conversão
+            </button>
+          </div>
+        )}
+      </div>
+    </div >
   );
 }
+
