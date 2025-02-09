@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"worker/internal/conversor"
 	"worker/internal/logger"
 
@@ -46,67 +47,74 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 	}
 
 	var wg sync.WaitGroup
-	msgCount := 0
+	timeout := time.After(10 * time.Second)
 
-	for d := range msgs {
-		msgCount++
-		wg.Add(1)
-
-		go func(d amqp.Delivery) {
-			defer wg.Done()
-
-			var job ConversionJob
-			if err := json.Unmarshal(d.Body, &job); err != nil {
-				logError := "Invalid job format: " + err.Error()
-				logger.SendLog(conn, "convert_log", job.OperationID, "error", logError)
-				d.Nack(false, false)
-				return
+	for {
+		select {
+		case d, ok := <-msgs:
+			if !ok {
+				log.Println("Canal fechado, encerrando worker.")
+				wg.Wait()
+				return nil
 			}
+			wg.Add(1)
+			go func(d amqp.Delivery) {
+				defer wg.Done()
 
-			log.Printf("Processing job: %s", job.OperationID)
-			logger.SendLog(conn, "convert_log", job.OperationID, "info", "Processing started")
+				var job ConversionJob
+				if err := json.Unmarshal(d.Body, &job); err != nil {
+					logError := "Invalid job format: " + err.Error()
+					logger.SendLog(conn, "convert_log", job.OperationID, "error", logError)
+					d.Nack(false, false)
+					return
+				}
 
-			progressCallback := func(progress int) {
+				log.Printf("Processing job: %s", job.OperationID)
+				logger.SendLog(conn, "convert_log", job.OperationID, "info", "Processing started")
+
+				progressCallback := func(progress int) {
+					response := ResponseMessage{
+						OperationID: job.OperationID,
+						Status:      "progress",
+						Progress:    progress,
+						Message:     "Processing...",
+					}
+					PublishResponse(conn, resQueue, response, d.CorrelationId)
+					logger.SendLog(conn, "convert_log", job.OperationID, "info", fmt.Sprintf("Progress: %d%%", progress))
+				}
+
+				err := conversor.ConvertFile(job.FilePath, job.OutputFormat, job.Quality, progressCallback)
+				if err != nil {
+					logError := "Conversion failed: " + err.Error()
+					logger.SendLog(conn, "convert_log", job.OperationID, "error", logError)
+
+					response := ResponseMessage{
+						OperationID: job.OperationID,
+						Status:      "error",
+						Message:     logError,
+					}
+					PublishResponse(conn, resQueue, response, d.CorrelationId)
+					d.Nack(false, false)
+					return
+				}
+
+				newFilePath := strings.TrimSuffix(job.FilePath, filepath.Ext(job.FilePath)) + "-converted." + job.OutputFormat
+				logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
+
 				response := ResponseMessage{
 					OperationID: job.OperationID,
-					Status:      "progress",
-					Progress:    progress,
-					Message:     "Processing...",
+					Status:      "success",
+					NewFilePath: newFilePath,
+					Message:     "Conversion completed successfully!",
 				}
 				PublishResponse(conn, resQueue, response, d.CorrelationId)
-				logger.SendLog(conn, "convert_log", job.OperationID, "info", fmt.Sprintf("Progress: %d%%", progress))
-			}
+				d.Ack(false)
+			}(d)
 
-			err := conversor.ConvertFile(job.FilePath, job.OutputFormat, job.Quality, progressCallback)
-			if err != nil {
-				logError := "Conversion failed: " + err.Error()
-				logger.SendLog(conn, "convert_log", job.OperationID, "error", logError)
-
-				response := ResponseMessage{
-					OperationID: job.OperationID,
-					Status:      "error",
-					Message:     logError,
-				}
-				PublishResponse(conn, resQueue, response, d.CorrelationId)
-				d.Nack(false, false)
-				return
-			}
-
-			newFilePath := strings.TrimSuffix(job.FilePath, filepath.Ext(job.FilePath)) + "-converted." + job.OutputFormat
-			logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
-
-			response := ResponseMessage{
-				OperationID: job.OperationID,
-				Status:      "success",
-				NewFilePath: newFilePath,
-				Message:     "Conversion completed successfully!",
-			}
-			PublishResponse(conn, resQueue, response, d.CorrelationId)
-			d.Ack(false)
-		}(d)
+		case <-timeout:
+			log.Println("Timeout sem mensagens, encerrando worker.")
+			wg.Wait()
+			return nil
+		}
 	}
-
-	wg.Wait()
-	log.Println("All messages processed. Shutting down worker.")
-	return nil
 }
