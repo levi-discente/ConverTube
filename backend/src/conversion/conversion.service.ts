@@ -1,7 +1,7 @@
-import { Injectable, Logger, BadRequestException } from "@nestjs/common";
-import { v4 as uuidv4 } from "uuid";
-import { RabbitMQPublisher } from "../rabbitmq/rabbitmq.publisher";
-import * as path from "path";
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { v4 as uuidv4 } from 'uuid';
+import { RabbitMQPublisher } from '../rabbitmq/rabbitmq.publisher';
+import * as path from 'path';
 
 @Injectable()
 export class ConversionService {
@@ -26,22 +26,22 @@ export class ConversionService {
   };
 
   private readonly videoFormats = new Set([
-    "mp4",
-    "avi",
-    "mkv",
-    "mov",
-    "flv",
-    "webm",
+    'mp4',
+    'avi',
+    'mkv',
+    'mov',
+    'flv',
+    'webm',
   ]);
   private readonly audioFormats = new Set([
-    "ogg",
-    "wav",
-    "mp3",
-    "aac",
-    "flac",
-    "wma",
+    'ogg',
+    'wav',
+    'mp3',
+    'aac',
+    'flac',
+    'wma',
   ]);
-  private readonly imageFormats = new Set(["gif"]);
+  private readonly imageFormats = new Set(['gif']);
 
   async storeFile(file: Express.Multer.File): Promise<string> {
     const ext = this.getFileExtension(file.originalname);
@@ -57,19 +57,18 @@ export class ConversionService {
 
   async createConversionJob(
     filePath: string,
+    fileName: string,
     outputFormat: string,
     quality: string,
   ): Promise<{ operationId: string; responseQueue: string }> {
     const inputFormat = this.getFileExtension(filePath);
 
-    // Verifica se o formato de saída é válido
     if (!this.supportedFormats[outputFormat]) {
       throw new BadRequestException(
         `Formato de saída '${outputFormat}' não é suportado.`,
       );
     }
 
-    // Impede conversões impossíveis
     if (this.isInvalidConversion(inputFormat, outputFormat)) {
       throw new BadRequestException(
         `Não é possível converter ${inputFormat.toUpperCase()} para ${outputFormat.toUpperCase()}.`,
@@ -81,6 +80,7 @@ export class ConversionService {
     const job = {
       operation_id: operationId,
       file_path: filePath,
+      file_name: fileName,
       output_format: outputFormat,
       request_time: new Date().toISOString(),
       quality: quality,
@@ -94,7 +94,7 @@ export class ConversionService {
   }
 
   private getFileExtension(filename: string): string {
-    return filename.split(".").pop()?.toLowerCase() || "";
+    return filename.split('.').pop()?.toLowerCase() || '';
   }
 
   private isInvalidConversion(
