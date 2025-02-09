@@ -60,7 +60,7 @@ export default function UploadPage() {
     formData.append('quality', quality);
 
     try {
-      const response = await fetch('http://localhost:3000/conversion/upload', {
+      const response = await fetch('http://api.conversor.com/conversion/upload', {
         method: 'POST',
         body: formData,
       });
@@ -80,7 +80,7 @@ export default function UploadPage() {
   };
 
   const listenToWebSocket = (operationId: string) => {
-    const socket = io('http://localhost:3000', {
+    const socket = io('http://api.conversor.com', {
       path: '/ws/',
       query: { operationId },
     });
@@ -90,7 +90,7 @@ export default function UploadPage() {
         setProgress(update.progress || 0);
       } else if (update.status === 'success') {
         setProgress(100);
-        setDownloadUrl(`http://localhost:3000/conversion/download/${update.new_file_name}`);
+        setDownloadUrl(`http://api.conversor.com/conversion/download/${update.new_file_name}`);
         showSuccess('Conversão concluída com sucesso!');
         socket.disconnect();
       } else if (update.status === 'error') {
