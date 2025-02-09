@@ -99,12 +99,14 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 				}
 
 				newFilePath := strings.TrimSuffix(job.FilePath, filepath.Ext(job.FilePath)) + "-converted." + job.OutputFormat
+				newFileName := job.FileName + "-converted." + job.OutputFormat
 				logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
 
 				response := ResponseMessage{
 					OperationID: job.OperationID,
 					Status:      "success",
 					NewFilePath: newFilePath,
+					NewFileName: newFileName,
 					Message:     "Conversion completed successfully!",
 				}
 				PublishResponse(conn, resQueue, response, d.CorrelationId)
