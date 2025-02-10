@@ -25,23 +25,38 @@ cd Worker
 docker build -t worker_v1 .
 cd ..
 
-# 3. Deploy dos recursos no Kubernetes
+# 3. Verifica se os serviços RabbitMQ e Minio já estão criados antes de recriar
+
+echo "Verificando se RabbitMQ e Minio já estão criados..."
+
+# Verifica se o RabbitMQ já está rodando
+if ! minikube kubectl get pods -l app=rabbitmq | grep -q "rabbitmq"; then
+  echo "RabbitMQ não encontrado. Criando RabbitMQ..."
+  minikube kubectl -- apply -f rabbitmq-cluster.yaml
+else
+  echo "RabbitMQ já está rodando. Pulando a criação."
+fi
+
+# Verifica se o Minio já está rodando
+if ! minikube kubectl get pods -l app=minio | grep -q "minio"; then
+  echo "Minio não encontrado. Criando Minio..."
+  minikube kubectl -- apply -f minio-statefulset.yaml
+else
+  echo "Minio já está rodando. Pulando a criação."
+fi
+
+# 4. Deploy dos recursos no Kubernetes
 
 echo "Realizando deploy dos recursos no Kubernetes..."
 cd kubenertes
 
-# Opcional: remover recursos antigos (usa --ignore-not-found para não dar erro se não existirem)
-minikube kubectl -- delete -f rabbitmq-cluster.yaml --ignore-not-found
-minikube kubectl -- delete -f minio-statefulset.yaml --ignore-not-found
+# Aplica os manifests de frontend, backend e worker
 minikube kubectl -- delete -f backend-deployment.yaml --ignore-not-found
 minikube kubectl -- delete -f frontend-deployment.yaml --ignore-not-found
 minikube kubectl -- delete -f job-creator.yaml --ignore-not-found
-
-# Aplica os manifests em uma ordem que faça sentido (dependendo do seu setup)
-minikube kubectl -- apply -f rabbitmq-cluster.yaml
-minikube kubectl -- apply -f minio-statefulset.yaml
 minikube kubectl -- apply -f backend-deployment.yaml
 minikube kubectl -- apply -f frontend-deployment.yaml
 minikube kubectl -- apply -f job-creator.yaml
 
 echo "Deploy realizado com sucesso!"
+cho "Deploy realizado com sucesso!"
