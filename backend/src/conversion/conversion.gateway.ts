@@ -30,6 +30,14 @@ export class ConversionGateway
   private activeConsumers: Map<string, string> = new Map();
 
   async afterInit(server: Server) {
+    process.on('SIGINT', () => {
+      this.shutdownRabbitMQ()
+        .then(() => process.exit(0))
+        .catch((err) => {
+          this.logger.error('Error shutting down RabbitMQ', err);
+          process.exit(1);
+        });
+    });
     try {
       this.connection = await amqp.connect(
         process.env.RABBITMQ_URL ||
@@ -39,6 +47,21 @@ export class ConversionGateway
       this.logger.log('RabbitMQ connection established in WebSocket Gateway');
     } catch (err) {
       this.logger.error('Failed to connect to RabbitMQ', err);
+    }
+  }
+
+  private async shutdownRabbitMQ() {
+    try {
+      if (this.channel) {
+        await this.channel.close();
+        this.logger.log('RabbitMQ channel closed');
+      }
+      if (this.connection) {
+        await this.connection.close();
+        this.logger.log('RabbitMQ connection closed');
+      }
+    } catch (err) {
+      this.logger.error('Error while shutting down RabbitMQ', err);
     }
   }
 
@@ -59,6 +82,14 @@ export class ConversionGateway
 
   handleDisconnect(client: Socket) {
     this.logger.log(`Client disconnected: ${client.id}`);
+
+    const operationId = Array.from(this.activeConsumers.entries()).find(
+      ([, consumerTag]) => consumerTag === client.id,
+    )?.[0];
+
+    if (operationId) {
+      this.cleanupJob(operationId);
+    }
   }
 
   async subscribeToJob(client: Socket, operationId: string) {
@@ -76,6 +107,7 @@ export class ConversionGateway
         (msg) => {
           if (msg) {
             try {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
               const response: ResponseMessage = JSON.parse(
                 msg.content.toString(),
               );
@@ -84,7 +116,6 @@ export class ConversionGateway
                 `Sent update to client ${client.id}: ${JSON.stringify(response)}`,
               );
 
-              // Finaliza se for erro ou sucesso
               if (
                 response.status === 'error' ||
                 response.status === 'success'
@@ -120,6 +151,18 @@ export class ConversionGateway
         .cancel(consumerTag)
         .catch((err) => this.logger.error('Error canceling consumer', err));
       this.activeConsumers.delete(operationId);
+    }
+
+    if (this.activeConsumers.size === 0) {
+      this.logger.log(
+        'Nenhum consumidor restante, fechando conexão com RabbitMQ',
+      );
+      this.channel
+        .close()
+        .catch((err) => this.logger.error('Erro ao fechar canal', err));
+      this.connection
+        .close()
+        .catch((err) => this.logger.error('Erro ao fechar conexão', err));
     }
   }
 }
