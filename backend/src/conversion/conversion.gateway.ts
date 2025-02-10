@@ -20,14 +20,19 @@ import { ResponseMessage } from './conversion.interfaces';
   },
 })
 export class ConversionGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(ConversionGateway.name);
   private connection: amqp.Connection;
   private channel: amqp.Channel;
-  private activeConsumers: Map<string, string> = new Map();
+
+  private activeConsumers: Map<
+    string,
+    { operationId: string; consumerTag: string }
+  > = new Map();
 
   async afterInit(server: Server) {
     process.on('SIGINT', () => {
@@ -41,7 +46,7 @@ export class ConversionGateway
     try {
       this.connection = await amqp.connect(
         process.env.RABBITMQ_URL ||
-        'amqp://guest:guest@rabbitmq.default.svc.cluster.local:5672/',
+          'amqp://guest:guest@rabbitmq.default.svc.cluster.local:5672/',
       );
       this.channel = await this.connection.createChannel();
       this.logger.log('RabbitMQ connection established in WebSocket Gateway');
@@ -83,12 +88,10 @@ export class ConversionGateway
   handleDisconnect(client: Socket) {
     this.logger.log(`Client disconnected: ${client.id}`);
 
-    const operationId = Array.from(this.activeConsumers.entries()).find(
-      ([, consumerTag]) => consumerTag === client.id,
-    )?.[0];
-
-    if (operationId) {
-      this.cleanupJob(operationId);
+    const consumerData = this.activeConsumers.get(client.id);
+    if (consumerData) {
+      this.cleanupJob(consumerData.operationId, consumerData.consumerTag);
+      this.activeConsumers.delete(client.id);
     }
   }
 
@@ -107,13 +110,14 @@ export class ConversionGateway
         (msg) => {
           if (msg) {
             try {
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
               const response: ResponseMessage = JSON.parse(
                 msg.content.toString(),
               );
               client.emit('jobUpdate', response);
               this.logger.log(
-                `Sent update to client ${client.id}: ${JSON.stringify(response)}`,
+                `Sent update to client ${client.id}: ${JSON.stringify(
+                  response,
+                )}`,
               );
 
               if (
@@ -121,7 +125,7 @@ export class ConversionGateway
                 response.status === 'success'
               ) {
                 this.logger.log(`Finalizando job ${operationId}`);
-                this.cleanupJob(operationId);
+                this.cleanupJob(operationId, consumerTag);
                 client.disconnect();
               }
             } catch (error) {
@@ -132,8 +136,7 @@ export class ConversionGateway
         { noAck: true },
       );
 
-      // Salva referência ao consumidor para futura remoção
-      this.activeConsumers.set(operationId, consumerTag);
+      this.activeConsumers.set(client.id, { operationId, consumerTag });
       this.logger.log(`Subscribed to job responses on queue: ${queueName}`);
     } catch (err) {
       this.logger.error(`Failed to subscribe to queue ${queueName}`, err);
@@ -144,14 +147,10 @@ export class ConversionGateway
     }
   }
 
-  cleanupJob(operationId: string) {
-    const consumerTag = this.activeConsumers.get(operationId);
-    if (consumerTag) {
-      this.channel
-        .cancel(consumerTag)
-        .catch((err) => this.logger.error('Error canceling consumer', err));
-      this.activeConsumers.delete(operationId);
-    }
+  cleanupJob(operationId: string, consumerTag: string) {
+    this.channel
+      .cancel(consumerTag)
+      .catch((err) => this.logger.error('Error canceling consumer', err));
 
     if (this.activeConsumers.size === 0) {
       this.logger.log(

@@ -28,7 +28,7 @@ export class KubernetesService {
         name: `worker-job-${operationId}`,
       },
       spec: {
-        ttlSecondsAfterFinished: 30,
+        ttlSecondsAfterFinished: 10,
         template: {
           metadata: {
             labels: {
