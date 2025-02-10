@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -60,7 +61,7 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 	}
 
 	var wg sync.WaitGroup
-	timeout := 30 * time.Second
+	jobTimeout := 30 * time.Second
 
 	for {
 		select {
@@ -75,72 +76,85 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 			go func(d amqp.Delivery) {
 				defer wg.Done()
 
-				defer func() {
-					if r := recover(); r != nil {
-						errorMsg := fmt.Sprintf("Worker panic: %v", r)
-						sendError(conn, resQueue, d, "unknown", errorMsg)
-					}
-				}()
+				ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+				defer cancel()
 
-				jobTimeout := time.After(timeout)
-				jobDone := make(chan bool)
-
-				go func() {
-					defer close(jobDone)
-
-					var job ConversionJob
-					if err := json.Unmarshal(d.Body, &job); err != nil {
-						sendError(conn, resQueue, d, "unknown", "Invalid job format: "+err.Error())
-						return
-					}
-
-					log.Printf("Processing job: %s", job.OperationID)
-					logger.SendLog(conn, "convert_log", job.OperationID, "info", "Processing started")
-
-					localFilePath := "/tmp/" + job.FileName
-					defer os.Remove(localFilePath)
-
-					if err := storageClient.DownloadFile(job.FilePath, localFilePath); err != nil {
-						sendError(conn, resQueue, d, job.OperationID, "Failed to download file from MinIO: "+err.Error())
-						return
-					}
-
-					progressCallback := func(progress int) {
-						sendResponse(conn, resQueue, d.CorrelationId, job.OperationID, "progress", progress, "Processing...")
-					}
-
-					if err := conversor.ConvertFile(localFilePath, job.OutputFormat, job.Quality, progressCallback); err != nil {
-						sendError(conn, resQueue, d, job.OperationID, "Conversion failed: "+err.Error())
-						return
-					}
-
-					newFileName := strings.TrimSuffix(job.FileName, filepath.Ext(job.FileName)) + "-converted." + job.OutputFormat
-					newFilePath := "/tmp/" + newFileName
-					defer os.Remove(newFilePath)
-
-					if err := storageClient.UploadFile(newFilePath, newFileName); err != nil {
-						sendError(conn, resQueue, d, job.OperationID, "Failed to upload converted file to MinIO: "+err.Error())
-						return
-					}
-
-					logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
-					sendResponse(conn, resQueue, d.CorrelationId, job.OperationID, "success", 100, "Conversion completed successfully!", newFileName)
-					d.Ack(false)
-					jobDone <- true
-				}()
-
-				select {
-				case <-jobDone:
-				case <-jobTimeout:
-					sendError(conn, resQueue, d, "unknown", "Processing timeout exceeded")
+				if err := processJob(ctx, conn, resQueue, d, storageClient); err != nil {
+					log.Printf("Erro no processamento do job: %v", err)
 				}
 			}(d)
 
-		case <-time.After(timeout):
+		case <-time.After(jobTimeout):
 			log.Println("Timeout sem mensagens, encerrando worker.")
 			wg.Wait()
 			return nil
 		}
+	}
+}
+
+func processJob(ctx context.Context, conn *amqp.Connection, resQueue string, d amqp.Delivery, storageClient *storage.MinIOStorage) error {
+	resultChan := make(chan error, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errMsg := fmt.Sprintf("Worker panic: %v", r)
+				sendError(conn, resQueue, d, "unknown", errMsg)
+				resultChan <- fmt.Errorf("%s", errMsg)
+			}
+		}()
+
+		var job ConversionJob
+		if err := json.Unmarshal(d.Body, &job); err != nil {
+			sendError(conn, resQueue, d, "unknown", "Invalid job format: "+err.Error())
+			resultChan <- err
+			return
+		}
+
+		log.Printf("Processing job: %s", job.OperationID)
+		logger.SendLog(conn, "convert_log", job.OperationID, "info", "Processing started")
+
+		localFilePath := "/tmp/" + job.FileName
+		defer os.Remove(localFilePath)
+
+		if err := storageClient.DownloadFile(job.FilePath, localFilePath); err != nil {
+			sendError(conn, resQueue, d, job.OperationID, "Failed to download file from MinIO: "+err.Error())
+			resultChan <- err
+			return
+		}
+
+		progressCallback := func(progress int) {
+			sendResponse(conn, resQueue, d.CorrelationId, job.OperationID, "progress", progress, "Processing...")
+		}
+
+		if err := conversor.ConvertFile(localFilePath, job.OutputFormat, job.Quality, progressCallback); err != nil {
+			sendError(conn, resQueue, d, job.OperationID, "Conversion failed: "+err.Error())
+			resultChan <- err
+			return
+		}
+
+		newFileName := strings.TrimSuffix(job.FileName, filepath.Ext(job.FileName)) + "-converted." + job.OutputFormat
+		newFilePath := "/tmp/" + newFileName
+		defer os.Remove(newFilePath)
+
+		if err := storageClient.UploadFile(newFilePath, newFileName); err != nil {
+			sendError(conn, resQueue, d, job.OperationID, "Failed to upload converted file to MinIO: "+err.Error())
+			resultChan <- err
+			return
+		}
+
+		logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
+		sendResponse(conn, resQueue, d.CorrelationId, job.OperationID, "success", 100, "Conversion completed successfully!", newFileName)
+		d.Ack(false)
+		resultChan <- nil
+	}()
+
+	select {
+	case err := <-resultChan:
+		return err
+	case <-ctx.Done():
+		sendError(conn, resQueue, d, "unknown", "Processing timeout exceeded")
+		return ctx.Err()
 	}
 }
 
