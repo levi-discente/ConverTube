@@ -3,9 +3,8 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
-} from "@nestjs/common";
-import * as amqp from "amqplib";
-import { v4 as uuidv4 } from "uuid";
+} from '@nestjs/common';
+import * as amqp from 'amqplib';
 
 @Injectable()
 export class RabbitMQPublisher implements OnModuleInit, OnModuleDestroy {
@@ -13,12 +12,13 @@ export class RabbitMQPublisher implements OnModuleInit, OnModuleDestroy {
   private channel: amqp.Channel;
   private readonly logger = new Logger(RabbitMQPublisher.name);
   private readonly rabbitMQUrl =
-    process.env.RABBITMQ_URL || "amqp://guest:guest@localhost:5672/";
+    process.env.RABBITMQ_URL ||
+    'amqp://guest:guest@rabbitmq.default.svc.cluster.local:5672/';
 
   async onModuleInit() {
     this.connection = await amqp.connect(this.rabbitMQUrl);
     this.channel = await this.connection.createChannel();
-    this.logger.log("RabbitMQ connection and channel established");
+    this.logger.log('RabbitMQ connection and channel established');
   }
 
   async onModuleDestroy() {

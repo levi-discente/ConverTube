@@ -11,29 +11,23 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConversionService } from './conversion.service';
-import { diskStorage } from 'multer';
-import * as path from 'path';
-import * as fs from 'fs';
+import { memoryStorage } from 'multer';
 import { Response } from 'express';
+import { StorageService } from 'src/storage/storage.service';
+import { Logger } from '@nestjs/common';
 
 @Controller('conversion')
 export class ConversionController {
-  constructor(private readonly conversionService: ConversionService) {}
+  private readonly logger = new Logger(ConversionController.name);
+  constructor(
+    private readonly conversionService: ConversionService,
+    private readonly storageService: StorageService,
+  ) {}
 
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './uploads',
-        filename: (req, file, callback) => {
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = path.extname(file.originalname);
-          const originalName = path.basename(file.originalname, ext);
-          const filename = `${originalName}-${uniqueSuffix}${ext}`;
-          callback(null, filename);
-        },
-      }),
+      storage: memoryStorage(),
     }),
   )
   async uploadFile(
@@ -41,13 +35,13 @@ export class ConversionController {
     @Body('outputFormat') outputFormat: string,
     @Body('quality') quality: string,
   ): Promise<{ operationId: string; responseQueue: string }> {
-    const filenameWithExtension = file.filename;
-    const { name } = path.parse(filenameWithExtension);
+    console.log('Body: ', file);
+    const originalName = file.originalname;
     const filePath = await this.conversionService.storeFile(file);
     const { operationId, responseQueue } =
       await this.conversionService.createConversionJob(
         filePath,
-        name,
+        originalName,
         outputFormat,
         quality,
       );
@@ -55,13 +49,15 @@ export class ConversionController {
   }
 
   @Get('download/:filename')
-  downloadFile(@Param('filename') filename: string, @Res() res: Response) {
-    const filePath = path.join(__dirname, '..', '..', 'uploads', filename);
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('Arquivo não encontrado');
+  async downloadFile(
+    @Param('filename') filename: string,
+    @Res() res: Response,
+  ) {
+    try {
+      const fileStream = await this.storageService.getFileStream(filename);
+      fileStream.pipe(res);
+    } catch (error) {
+      throw new NotFoundException('Arquivo não encontrado no MinIO ' + error);
     }
-
-    res.download(filePath, filename);
   }
 }

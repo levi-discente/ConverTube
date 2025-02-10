@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { io } from 'socket.io-client';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import logoImage from '../public/logo.png'
+import logoImage from '../public/logo.png';
 import Image from 'next/image';
 import { FaVideo } from 'react-icons/fa6';
 import { FaMusic } from 'react-icons/fa';
@@ -16,7 +16,7 @@ export default function UploadPage() {
   const [progress, setProgress] = useState<number>(0);
   const [operationId, setOperationId] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState('video'); // Video ou audio
+  const [activeTab, setActiveTab] = useState('video');
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
@@ -60,7 +60,7 @@ export default function UploadPage() {
     formData.append('quality', quality);
 
     try {
-      const response = await fetch('http://localhost:3000/conversion/upload', {
+      const response = await fetch('http://backend.local/conversion/upload', {
         method: 'POST',
         body: formData,
       });
@@ -73,16 +73,22 @@ export default function UploadPage() {
 
       setOperationId(data.operationId);
       listenToWebSocket(data.operationId);
-    } catch (error: any) {
-      console.error('Erro ao enviar o arquivo:', error);
-      showError(error.message || 'Erro ao enviar o arquivo.');
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Erro ao enviar o arquivo:', error);
+        showError(error.message || 'Erro ao enviar o arquivo.');
+      } else {
+        console.error('Erro desconhecido:', error);
+        showError('Erro desconhecido.');
+      }
     }
   };
 
   const listenToWebSocket = (operationId: string) => {
-    const socket = io('http://localhost:3000', {
+    const socket = io('http://backend.local', {
       path: '/ws/',
       query: { operationId },
+      withCredentials: true,
     });
 
     socket.on('jobUpdate', (update) => {
@@ -90,7 +96,7 @@ export default function UploadPage() {
         setProgress(update.progress || 0);
       } else if (update.status === 'success') {
         setProgress(100);
-        setDownloadUrl(`http://localhost:3000/conversion/download/${update.new_file_name}`);
+        setDownloadUrl(`http://backend.local/conversion/download/${update.new_file_name}`);
         showSuccess('Conversão concluída com sucesso!');
         socket.disconnect();
       } else if (update.status === 'error') {
@@ -103,7 +109,7 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-black text-white p-4">
       <ToastContainer />
-      <Image src={logoImage} alt='logo' width={240} />
+      <Image src={logoImage} alt="logo" width={240} />
 
       <div className="bg-gray-900 p-6 rounded-lg shadow-lg w-96 text-center">
         {!downloadUrl && (
@@ -123,10 +129,10 @@ export default function UploadPage() {
                     setQuality('low');
                   }}
                   className={`tab-button py-2 w-full rounded-t-md transition-all px-4 flex items-center justify-center
-      ${activeTab === 'video' ? 'bg-gray-400' : 'bg-gray-700'} 
-      ${activeTab === 'video' ? 'text-black' : 'text-white'}`}
+                    ${activeTab === 'video' ? 'bg-gray-400' : 'bg-gray-700'} 
+                    ${activeTab === 'video' ? 'text-black' : 'text-white'}`}
                 >
-                  <FaVideo className="mr-2" /> {/* Adiciona margem à direita do ícone */}
+                  <FaVideo className="mr-2" />
                   Video
                 </button>
                 <button
@@ -136,10 +142,10 @@ export default function UploadPage() {
                     setQuality('low');
                   }}
                   className={`tab-button py-2 w-full rounded-t-md transition-all px-4 flex items-center justify-center
-      ${activeTab === 'audio' ? 'bg-gray-400' : 'bg-gray-700'} 
-      ${activeTab === 'audio' ? 'text-black' : 'text-white'}`}
+                    ${activeTab === 'audio' ? 'bg-gray-400' : 'bg-gray-700'} 
+                    ${activeTab === 'audio' ? 'text-black' : 'text-white'}`}
                 >
-                  <FaMusic className="mr-2" /> {/* Adiciona margem à direita do ícone */}
+                  <FaMusic className="mr-2" />
                   Áudio
                 </button>
               </div>
@@ -231,7 +237,7 @@ export default function UploadPage() {
           </div>
         )}
       </div>
-    </div >
+    </div>
   );
 }
 

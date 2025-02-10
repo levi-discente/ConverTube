@@ -2,19 +2,31 @@ package broker
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"worker/internal/conversor"
 	"worker/internal/logger"
+	"worker/internal/storage"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
+	storageClient, err := storage.NewMinIOStorage(
+		"minio-headless.default.svc.cluster.local:9000",
+		"minio",
+		"minio123",
+		"uploads",
+		false,
+	)
+	if err != nil {
+		log.Fatalf("Erro ao conectar ao MinIO: %v", err)
+	}
+
 	ch, err := conn.Channel()
 	if err != nil {
 		return err
@@ -47,7 +59,7 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 	}
 
 	var wg sync.WaitGroup
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(30 * time.Second)
 
 	for {
 		select {
@@ -63,53 +75,42 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 
 				var job ConversionJob
 				if err := json.Unmarshal(d.Body, &job); err != nil {
-					logError := "Invalid job format: " + err.Error()
-					logger.SendLog(conn, "convert_log", job.OperationID, "error", logError)
-					d.Nack(false, false)
+					sendError(conn, resQueue, d, job.OperationID, "Invalid job format: "+err.Error())
 					return
 				}
 
 				log.Printf("Processing job: %s", job.OperationID)
 				logger.SendLog(conn, "convert_log", job.OperationID, "info", "Processing started")
+				log.Printf("Job recebido: %+v", job)
 
-				progressCallback := func(progress int) {
-					response := ResponseMessage{
-						OperationID: job.OperationID,
-						Status:      "progress",
-						Progress:    progress,
-						Message:     "Processing...",
-					}
-					PublishResponse(conn, resQueue, response, d.CorrelationId)
-					logger.SendLog(conn, "convert_log", job.OperationID, "info", fmt.Sprintf("Progress: %d%%", progress))
-				}
+				localFilePath := "/tmp/" + job.FileName
+				defer os.Remove(localFilePath)
 
-				err := conversor.ConvertFile(job.FilePath, job.OutputFormat, job.Quality, progressCallback)
-				if err != nil {
-					logError := "Conversion failed: " + err.Error()
-					logger.SendLog(conn, "convert_log", job.OperationID, "error", logError)
-
-					response := ResponseMessage{
-						OperationID: job.OperationID,
-						Status:      "error",
-						Message:     logError,
-					}
-					PublishResponse(conn, resQueue, response, d.CorrelationId)
-					d.Nack(false, false)
+				if err := storageClient.DownloadFile(job.FilePath, localFilePath); err != nil {
+					sendError(conn, resQueue, d, job.OperationID, "Failed to download file from MinIO: "+err.Error())
 					return
 				}
 
-				newFilePath := strings.TrimSuffix(job.FilePath, filepath.Ext(job.FilePath)) + "-converted." + job.OutputFormat
-				newFileName := job.FileName + "-converted." + job.OutputFormat
-				logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
-
-				response := ResponseMessage{
-					OperationID: job.OperationID,
-					Status:      "success",
-					NewFilePath: newFilePath,
-					NewFileName: newFileName,
-					Message:     "Conversion completed successfully!",
+				progressCallback := func(progress int) {
+					sendResponse(conn, resQueue, d.CorrelationId, job.OperationID, "progress", progress, "Processing...")
 				}
-				PublishResponse(conn, resQueue, response, d.CorrelationId)
+
+				if err := conversor.ConvertFile(localFilePath, job.OutputFormat, job.Quality, progressCallback); err != nil {
+					sendError(conn, resQueue, d, job.OperationID, "Conversion failed: "+err.Error())
+					return
+				}
+
+				newFileName := strings.TrimSuffix(job.FileName, filepath.Ext(job.FileName)) + "-converted." + job.OutputFormat
+				newFilePath := "/tmp/" + newFileName
+				defer os.Remove(newFilePath)
+
+				if err := storageClient.UploadFile(newFilePath, newFileName); err != nil {
+					sendError(conn, resQueue, d, job.OperationID, "Failed to upload converted file to MinIO: "+err.Error())
+					return
+				}
+
+				logger.SendLog(conn, "convert_log", job.OperationID, "success", "Conversion completed successfully")
+				sendResponse(conn, resQueue, d.CorrelationId, job.OperationID, "success", 100, "Conversion completed successfully!", newFileName)
 				d.Ack(false)
 			}(d)
 
@@ -119,4 +120,45 @@ func StartConsumer(conn *amqp.Connection, reqQueue, resQueue string) error {
 			return nil
 		}
 	}
+}
+
+func sendResponse(conn *amqp.Connection, resQueue, correlationID, operationID, status string, progress int, message string, fileName ...string) {
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Printf("Erro ao abrir canal para resposta: %v", err)
+		return
+	}
+	defer ch.Close()
+
+	response := ResponseMessage{
+		OperationID: operationID,
+		Status:      status,
+		Progress:    progress,
+		Message:     message,
+	}
+	if len(fileName) > 0 {
+		response.NewFileName = fileName[0]
+	}
+
+	body, _ := json.Marshal(response)
+	err = ch.Publish(
+		"",
+		resQueue,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType:   "application/json",
+			CorrelationId: correlationID,
+			Body:          body,
+		},
+	)
+	if err != nil {
+		log.Printf("Erro ao publicar resposta para RabbitMQ: %v", err)
+	}
+}
+
+func sendError(conn *amqp.Connection, resQueue string, d amqp.Delivery, operationID, errorMessage string) {
+	logger.SendLog(conn, "convert_log", operationID, "error", errorMessage)
+	sendResponse(conn, resQueue, d.CorrelationId, operationID, "error", 0, errorMessage)
+	d.Nack(false, false)
 }
